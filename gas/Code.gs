@@ -11,6 +11,11 @@
 // デフォルトのアクセスパスワード（GASのスクリプトプロパティ「PASSWORD」を設定することで上書き・厳密化できます）
 const DEFAULT_PASSWORD = "counter_secret_token_2026";
 
+// 許容される属性値（スキーマ定義）
+const ALLOWED_GENDERS = ["男性", "女性", "その他"];
+const ALLOWED_AGE_GROUPS = ["10代", "20代", "30代", "40代", "50代", "60代以上"];
+const ALLOWED_STATUSES = ["有効", "取消"];
+
 /**
  * GETリクエスト: 疎通確認・ヘルスチェック用
  */
@@ -57,6 +62,15 @@ function doPost(e) {
       }, 401);
     }
 
+    // 2. スキーマバリデーション（必須項目・許容値チェック）
+    const validationError = validatePayload(payload);
+    if (validationError) {
+      return createJsonResponse({
+        status: "error",
+        message: "不正なデータ形式です: " + validationError
+      }, 400);
+    }
+
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const rawSheet = getOrCreateSheet(ss, "raw_logs", [
       "レコードID",
@@ -72,21 +86,21 @@ function doPost(e) {
     let insertedCount = 0;
     let canceledCount = 0;
 
-    // 2. 取消（UNDO）レコードのステータス更新
+    // 3. 取消（UNDO）レコードのステータス更新
     if (Array.isArray(payload.cancelIds) && payload.cancelIds.length > 0) {
       canceledCount = markRecordsAsCanceled(rawSheet, payload.cancelIds);
     }
 
-    // 3. 新規明細ログの一括追記
+    // 4. 新規明細ログの一括追記
     if (Array.isArray(payload.logs) && payload.logs.length > 0) {
       const serverTime = new Date();
       const rows = payload.logs.map(log => [
-        log.recordId || log.id || "",
-        log.timestamp || "",
-        payload.deviceId || "unknown",
+        log.recordId || log.id,
+        log.timestamp,
+        payload.deviceId,
         payload.userName || "未設定",
-        log.gender || "",
-        log.ageGroup || "",
+        log.gender,
+        log.ageGroup,
         log.status || "有効",
         serverTime
       ]);
@@ -164,4 +178,79 @@ function getOrCreateSheet(ss, sheetName, headers) {
 function createJsonResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * リクエストペイロードのスキーマ検証
+ * @param {Object} payload 
+ * @returns {string|null} エラーメッセージ（正常時はnull）
+ */
+function validatePayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "ペイロードがオブジェクト形式ではありません。";
+  }
+
+  // 端末IDの検証
+  if (!payload.deviceId || typeof payload.deviceId !== "string" || payload.deviceId.trim() === "") {
+    return "端末ID（deviceId）は必須です。";
+  }
+
+  // 配布者名の検証（未設定または文字列）
+  if (payload.userName !== undefined && typeof payload.userName !== "string") {
+    return "配布者名（userName）は文字列である必要があります。";
+  }
+
+  // logs 配列の検証
+  if (payload.logs !== undefined) {
+    if (!Array.isArray(payload.logs)) {
+      return "logs は配列である必要があります。";
+    }
+
+    for (let i = 0; i < payload.logs.length; i++) {
+      const log = payload.logs[i];
+      if (!log || typeof log !== "object") {
+        return `logs[${i}] がオブジェクトではありません。`;
+      }
+
+      // レコードID検証
+      const recordId = log.recordId || log.id;
+      if (!recordId || typeof recordId !== "string" || recordId.trim() === "") {
+        return `logs[${i}]: recordId は必須の非空文字列です。`;
+      }
+
+      // タイムスタンプ検証
+      if (!log.timestamp || typeof log.timestamp !== "string" || isNaN(Date.parse(log.timestamp))) {
+        return `logs[${i}]: timestamp は有効なISO日時文字列である必要があります。`;
+      }
+
+      // 性別検証（男性、女性、その他のみ）
+      if (!log.gender || !ALLOWED_GENDERS.includes(log.gender)) {
+        return `logs[${i}]: 性別（gender）は「${ALLOWED_GENDERS.join(" / ")}」のいずれかである必要があります。（受信値: ${log.gender}）`;
+      }
+
+      // 年代検証（10代〜60代以上）
+      if (!log.ageGroup || !ALLOWED_AGE_GROUPS.includes(log.ageGroup)) {
+        return `logs[${i}]: 年代（ageGroup）は「${ALLOWED_AGE_GROUPS.join(" / ")}」のいずれかである必要があります。（受信値: ${log.ageGroup}）`;
+      }
+
+      // ステータス検証（指定がある場合）
+      if (log.status && !ALLOWED_STATUSES.includes(log.status)) {
+        return `logs[${i}]: ステータス（status）は「${ALLOWED_STATUSES.join(" / ")}」である必要があります。（受信値: ${log.status}）`;
+      }
+    }
+  }
+
+  // cancelIds 配列の検証
+  if (payload.cancelIds !== undefined) {
+    if (!Array.isArray(payload.cancelIds)) {
+      return "cancelIds は配列である必要があります。";
+    }
+    for (let i = 0; i < payload.cancelIds.length; i++) {
+      if (typeof payload.cancelIds[i] !== "string" || payload.cancelIds[i].trim() === "") {
+        return `cancelIds[${i}] は非空文字列である必要があります。`;
+      }
+    }
+  }
+
+  return null;
 }

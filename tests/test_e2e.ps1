@@ -101,4 +101,65 @@ if ($resUndo.status -eq "success" -and $resUndo.canceled -ge 1) {
   Write-Host " -> FAIL: Cancel update failed: $($resUndo | ConvertTo-Json)" -ForegroundColor Red
 }
 
-Write-Host "`n=== ALL E2E EXTERNAL INTEGRATION TESTS PASSED (JAPANESE DATA ALIGNED) ===" -ForegroundColor Cyan
+# 5. Schema validation test: Reject invalid attributes (e.g. English 'Female' / '20s')
+Write-Host "`n[TEST 5] Testing schema validation: Rejecting invalid attributes (English 'Female' / '20s')..."
+$payloadInvalidAttr = @{
+  password = $testPassword
+  apiToken = $testPassword
+  deviceId = "dev-tester-real"
+  userName = $strUser
+  logs = @(
+    @{
+      recordId = "$ts-invalid-attr"
+      timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+      gender = "Female" # Invalid! Must be 女性/男性/その他
+      ageGroup = "20s"  # Invalid! Must be 20代
+      status = "有効"
+    }
+  )
+  cancelIds = @()
+} | ConvertTo-Json -Depth 5 -Compress
+
+try {
+  $resInvalid = Invoke-RestMethod -Uri $gasUrl -Method Post -Body $payloadInvalidAttr -ContentType "text/plain;charset=UTF-8"
+  if ($resInvalid.status -eq "error") {
+    Write-Host " -> PASS: Correctly rejected invalid attributes with error: $($resInvalid.message)" -ForegroundColor Green
+  } else {
+    Write-Host " -> FAIL: Unexpectedly accepted invalid attributes (Female/20s)!" -ForegroundColor Red
+  }
+} catch {
+  Write-Host " -> PASS: Correctly rejected invalid attributes with HTTP error ($($_.Exception.Message))" -ForegroundColor Green
+}
+
+# 6. Schema validation test: Reject missing required fields (empty deviceId)
+Write-Host "`n[TEST 6] Testing schema validation: Rejecting missing required fields (empty deviceId)..."
+$payloadMissingKey = @{
+  password = $testPassword
+  apiToken = $testPassword
+  deviceId = "" # Invalid! Empty deviceId
+  userName = $strUser
+  logs = @(
+    @{
+      recordId = "$ts-missing-dev"
+      timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+      gender = $strFemale
+      ageGroup = $strAge20
+      status = $strValid
+    }
+  )
+  cancelIds = @()
+} | ConvertTo-Json -Depth 5 -Compress
+
+try {
+  $resMissing = Invoke-RestMethod -Uri $gasUrl -Method Post -Body $payloadMissingKey -ContentType "text/plain;charset=UTF-8"
+  if ($resMissing.status -eq "error") {
+    Write-Host " -> PASS: Correctly rejected missing required deviceId: $($resMissing.message)" -ForegroundColor Green
+  } else {
+    Write-Host " -> FAIL: Unexpectedly accepted missing deviceId!" -ForegroundColor Red
+  }
+} catch {
+  Write-Host " -> PASS: Correctly rejected missing deviceId with HTTP error ($($_.Exception.Message))" -ForegroundColor Green
+}
+
+Write-Host "`n=== ALL E2E EXTERNAL INTEGRATION & SCHEMA VALIDATION TESTS FINISHED ===" -ForegroundColor Cyan
+
