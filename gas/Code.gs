@@ -71,8 +71,7 @@ function doPost(e) {
       }, 400);
     }
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const rawSheet = getOrCreateSheet(ss, "raw_logs", [
+    const headers = [
       "レコードID",
       "記録日時(端末)",
       "端末ID",
@@ -80,8 +79,18 @@ function doPost(e) {
       "性別",
       "年代",
       "ステータス",
-      "受信日時(サーバー)"
-    ]);
+      "受信日時(サーバー)",
+      "時間帯(時)"
+    ];
+    const rawSheet = getOrCreateSheet(ss, "raw_logs", headers);
+
+    // 既存シートで9列目が未定義の場合はヘッダーを追加
+    if (rawSheet.getLastColumn() < 9) {
+      rawSheet.getRange(1, 9).setValue("時間帯(時)")
+        .setBackground("#1e293b")
+        .setFontColor("#f8fafc")
+        .setFontWeight("bold");
+    }
 
     let insertedCount = 0;
     let canceledCount = 0;
@@ -94,6 +103,7 @@ function doPost(e) {
     // 4. 新規明細ログの一括追記
     if (Array.isArray(payload.logs) && payload.logs.length > 0) {
       const serverTime = new Date();
+      const hour = serverTime.getHours();
       const rows = payload.logs.map(log => [
         log.recordId || log.id,
         log.timestamp,
@@ -102,7 +112,8 @@ function doPost(e) {
         log.gender,
         log.ageGroup,
         log.status || "有効",
-        serverTime
+        serverTime,
+        hour
       ]);
 
       const lastRow = rawSheet.getLastRow();
@@ -254,3 +265,196 @@ function validatePayload(payload) {
 
   return null;
 }
+
+/**
+ * スプレッドシートを開いた時にカスタムメニューを追加
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu("チラシ集計")
+    .addItem("📊 ダッシュボードを作成/再構築", "setupDashboard")
+    .addItem("🕒 生データに時間帯列を補完", "fillHoursInRawLogs")
+    .addToUi();
+}
+
+/**
+ * 過去の生データ（raw_logs）で時間帯列（I列）が空の行を補完
+ */
+function fillHoursInRawLogs() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet = ss.getSheetByName("raw_logs");
+  if (!rawSheet) return;
+
+  const lastRow = rawSheet.getLastRow();
+  if (lastRow <= 1) return;
+
+  // H列（受信日時）とI列（時間帯）
+  const data = rawSheet.getRange(2, 8, lastRow - 1, 2).getValues();
+  for (let i = 0; i < data.length; i++) {
+    const serverTime = data[i][0];
+    if (serverTime instanceof Date && (data[i][1] === "" || data[i][1] === undefined)) {
+      data[i][1] = serverTime.getHours();
+    }
+  }
+  rawSheet.getRange(2, 8, data.length, 2).setValues(data);
+  SpreadsheetApp.getActiveSpreadsheet().toast("時間帯列の補完が完了しました。", "完了", 3);
+}
+
+/**
+ * リアルタイム集計ダッシュボードシート（dashboard）を作成・初期化
+ */
+function setupDashboard() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("dashboard");
+  if (!sheet) {
+    sheet = ss.insertSheet("dashboard", 0); // 先頭に挿入
+  } else {
+    sheet.clear();
+  }
+
+  // グリッド線を表示
+  sheet.setHiddenGridlines(false);
+
+  // 1. タイトルバナー
+  sheet.getRange("A1:P1").merge()
+    .setValue("📊 チラシ配布 リアルタイム集計ダッシュボード")
+    .setBackground("#1e293b")
+    .setFontColor("#f8fafc")
+    .setFontSize(16)
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+  sheet.setRowHeight(1, 45);
+
+  // 2. KPIカード
+  // 総有効配布枚数
+  sheet.getRange("B3:C3").merge().setValue("総配布枚数 (有効)").setFontWeight("bold").setFontColor("#1e40af").setHorizontalAlignment("center");
+  sheet.getRange("B4:C4").merge().setFormula('=COUNTIF(raw_logs!G:G, "有効")').setFontSize(22).setFontWeight("bold").setFontColor("#1e40af").setHorizontalAlignment("center").setVerticalAlignment("middle").setBackground("#eff6ff");
+  sheet.getRange("B3:C4").setBorder(true, true, true, true, false, false, "#93c5fd", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  // 稼働スタッフ数
+  sheet.getRange("E3:F3").merge().setValue("稼働スタッフ数").setFontWeight("bold").setFontColor("#065f46").setHorizontalAlignment("center");
+  sheet.getRange("E4:F4").merge().setFormula('=IFERROR(COUNTA(UNIQUE(FILTER(raw_logs!D2:D, raw_logs!G2:G="有効", raw_logs!D2:D<>""))), 0)').setFontSize(22).setFontWeight("bold").setFontColor("#065f46").setHorizontalAlignment("center").setVerticalAlignment("middle").setBackground("#ecfdf5");
+  sheet.getRange("E3:F4").setBorder(true, true, true, true, false, false, "#a7f3d0", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  // 最終受信日時
+  sheet.getRange("H3:J3").merge().setValue("最終受信日時").setFontWeight("bold").setFontColor("#334155").setHorizontalAlignment("center");
+  sheet.getRange("H4:J4").merge().setFormula('=IFERROR(TEXT(MAX(raw_logs!H:H), "yyyy/mm/dd hh:mm:ss"), "-")').setFontSize(14).setFontWeight("bold").setFontColor("#334155").setHorizontalAlignment("center").setVerticalAlignment("middle").setBackground("#f8fafc");
+  sheet.getRange("H3:J4").setBorder(true, true, true, true, false, false, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  sheet.setRowHeight(3, 24);
+  sheet.setRowHeight(4, 40);
+
+  // 3. セクション1: 年代 × 性別 配布集計
+  sheet.getRange("A6:F6").merge()
+    .setValue("■ 年代・性別別 配布集計")
+    .setBackground("#3b82f6")
+    .setFontColor("#ffffff")
+    .setFontWeight("bold")
+    .setFontSize(11)
+    .setVerticalAlignment("middle");
+  sheet.setRowHeight(6, 28);
+
+  const ageHeaders = [["年代", "男性", "女性", "その他", "合計", "構成比"]];
+  sheet.getRange("A7:F7").setValues(ageHeaders)
+    .setBackground("#f1f5f9")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setBorder(true, true, true, true, true, true, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID);
+
+  const ageGroups = ["10代", "20代", "30代", "40代", "50代", "60代以上"];
+  const ageRows = [];
+  for (let i = 0; i < ageGroups.length; i++) {
+    const rowIdx = 8 + i;
+    ageRows.push([
+      ageGroups[i],
+      `=COUNTIFS(raw_logs!$G:$G, "有効", raw_logs!$E:$E, B$7, raw_logs!$F:$F, $A${rowIdx})`,
+      `=COUNTIFS(raw_logs!$G:$G, "有効", raw_logs!$E:$E, C$7, raw_logs!$F:$F, $A${rowIdx})`,
+      `=COUNTIFS(raw_logs!$G:$G, "有効", raw_logs!$E:$E, D$7, raw_logs!$F:$F, $A${rowIdx})`,
+      `=SUM(B${rowIdx}:D${rowIdx})`,
+      `=IFERROR(E${rowIdx}/$E$14, 0)`
+    ]);
+  }
+  sheet.getRange("A8:F13").setValues(ageRows)
+    .setHorizontalAlignment("center")
+    .setBorder(true, true, true, true, true, true, "#e2e8f0", SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange("F8:F13").setNumberFormat("0.0%");
+
+  // 年代合計行
+  const ageTotalRow = [
+    ["合計", "=SUM(B8:B13)", "=SUM(C8:C13)", "=SUM(D8:D13)", "=SUM(E8:E13)", "=IFERROR(SUM(F8:F13), 1)"]
+  ];
+  sheet.getRange("A14:F14").setValues(ageTotalRow)
+    .setBackground("#e2e8f0")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setBorder(true, true, true, true, true, true, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  sheet.getRange("F14").setNumberFormat("0.0%");
+
+  // 4. セクション2: 時間帯別 × 配布者別 配布実績
+  sheet.getRange("A16:P16").merge()
+    .setValue("■ 時間帯別 × 配布者別 配布実績")
+    .setBackground("#10b981")
+    .setFontColor("#ffffff")
+    .setFontWeight("bold")
+    .setFontSize(11)
+    .setVerticalAlignment("middle");
+  sheet.setRowHeight(16, 28);
+
+  const timeHeaders = ["配布者名"];
+  for (let h = 8; h <= 21; h++) {
+    timeHeaders.push(`${h}時台`);
+  }
+  timeHeaders.push("個人合計");
+
+  sheet.getRange(17, 1, 1, timeHeaders.length).setValues([timeHeaders])
+    .setBackground("#f1f5f9")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setBorder(true, true, true, true, true, true, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID);
+
+  // 最大10人分のスタッフ行枠を用意
+  const staffRows = [];
+  for (let s = 0; s < 10; s++) {
+    const rowIdx = 18 + s;
+    const rowFormula = [];
+    // A列: ユニーク配布者名（上から順に自動取得）
+    rowFormula.push(`=IFERROR(INDEX(SORT(UNIQUE(FILTER(raw_logs!$D$2:$D, raw_logs!$G$2:$G="有効", raw_logs!$D$2:$D<>""))), ${s + 1}), "")`);
+
+    // B〜O列: 各時間帯の件数
+    for (let h = 8; h <= 21; h++) {
+      rowFormula.push(`=IF($A${rowIdx}="", "", COUNTIFS(raw_logs!$G:$G, "有効", raw_logs!$D:$D, $A${rowIdx}, raw_logs!$I:$I, ${h}))`);
+    }
+    // P列: 個人合計
+    rowFormula.push(`=IF($A${rowIdx}="", "", SUM(B${rowIdx}:O${rowIdx}))`);
+    staffRows.push(rowFormula);
+  }
+
+  sheet.getRange(18, 1, staffRows.length, timeHeaders.length).setValues(staffRows)
+    .setHorizontalAlignment("center")
+    .setBorder(true, true, true, true, true, true, "#e2e8f0", SpreadsheetApp.BorderStyle.SOLID);
+
+  // 時間帯合計行
+  const totalRowIdx = 18 + staffRows.length;
+  const timeTotalRow = ["時間帯合計"];
+  for (let c = 2; c <= 15; c++) {
+    const colLetter = String.fromCharCode(64 + c);
+    timeTotalRow.push(`=SUM(${colLetter}18:${colLetter}${totalRowIdx - 1})`);
+  }
+  timeTotalRow.push(`=SUM(P18:P${totalRowIdx - 1})`);
+
+  sheet.getRange(totalRowIdx, 1, 1, timeHeaders.length).setValues([timeTotalRow])
+    .setBackground("#e2e8f0")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setBorder(true, true, true, true, true, true, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  // 列幅の調整
+  sheet.setColumnWidth(1, 120); // A列: 配布者名 / 年代
+  for (let c = 2; c <= 16; c++) {
+    sheet.setColumnWidth(c, 75);
+  }
+
+  SpreadsheetApp.getActiveSpreadsheet().toast("ダッシュボードの構築が完了しました！", "成功", 5);
+}
+
