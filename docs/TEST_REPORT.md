@@ -66,20 +66,31 @@
 
 実際に公開されている GitHub Pages および Googleスプレッドシート連携GAS宛てに、自動テストスクリプトを実行した検証結果です。
 
-* **検証日時**: 2026-10-24 21:35:25
+* **検証日時**: 2026-10-24 21:49:32
 * **検証パスワード**: `chirashi2026`（スクリプトプロパティ照合）
 
 ```text
 === Flyer Counter E2E External Integration Test ===
+
 [TEST 1] Checking GitHub Pages deployment...
  -> PASS: Correct GAS URL is embedded on GitHub Pages
-[TEST 2] Testing normal data submission with password 'chirashi2026'...
- -> PASS: Record successfully inserted into spreadsheet (inserted: 1, recordId: e2e-1792845318727)
+
+[TEST 2] Testing normal data submission (matching real app Japanese attributes)...
+ -> PASS: Record successfully inserted with Japanese attributes (女性 / 20代 / 有効, recordId: 1792846159926-test99)
+
 [TEST 3] Testing BOT protection with wrong password 'bad_bot_pass'...
  -> PASS: Unauthorized access blocked with error status (認証に失敗しました。パスワードが正しくありません。)
-[TEST 4] Testing UNDO cancel status update for record 'e2e-1792845318727'...
- -> PASS: Record status successfully updated to CANCELED (canceled: 1)
-=== ALL E2E EXTERNAL INTEGRATION TESTS PASSED ===
+
+[TEST 4] Testing UNDO cancel status update for record '1792846159926-test99'...
+ -> PASS: Record status successfully updated to '取消' (canceled: 1)
+
+[TEST 5] Testing schema validation: Rejecting invalid attributes (English 'Female' / '20s')...
+ -> PASS: Correctly rejected invalid attributes with error: 不正なデータ形式です: logs[0]: 性別（gender）は「男性 / 女性 / その他」のいずれかである必要があります。（受信値: Female）
+
+[TEST 6] Testing schema validation: Rejecting missing required fields (empty deviceId)...
+ -> PASS: Correctly rejected missing required deviceId: 不正なデータ形式です: 端末ID（deviceId）は必須です。
+
+=== ALL E2E EXTERNAL INTEGRATION & SCHEMA VALIDATION TESTS FINISHED ===
 ```
 
 ### E2Eテストの詳細検証項目
@@ -96,15 +107,19 @@
 4. **[TEST 4] UNDO取り消し連携テスト**:
    - TEST 2 で登録したレコードIDに対して取消リクエスト（`cancelIds`）をPOST送信。
    - GASから `status: success, canceled: 1` を受信し、スプレッドシート該当行のステータスが **「取消」** に自動更新されたことを確認。
-5. **[TEST 5 & 6] スキーマバリデーションテスト (異常系)**:
-   - 定義外属性値（英字 `Female` / `20s` など）や必須キー欠落（空 `deviceId`）を検知・拒絶するテストケースを追加。
-   - スキーマバリデーション機能を含む [gas/Code.gs](../gas/Code.gs) をGASへ新バージョンとして再デプロイすることで、不正データによるスプレッドシート汚染を完全に防止できます。
+5. **[TEST 5] 不正属性値の拒絶テスト (スキーマバリデーション)**:
+   - 定義外属性値（英字 `Female` / `20s` など）を送信。
+   - GAS側で `400 Bad Request`（「性別は男性 / 女性 / その他のいずれかである必要があります」）を返し、スプレッドシートへの記録をブロックすることを確認。
+6. **[TEST 6] 必須項目欠落の拒絶テスト (スキーマバリデーション)**:
+   - 必須キーである端末ID（`deviceId`）が空のデータを送信。
+   - GAS側で `400 Bad Request`（「端末ID（deviceId）は必須です」）を返し、不正な記録をブロックすることを確認。
 
 ---
 
 ## 5. 結論と本番展開への判定
 
-* **判定**: **合格（GAS再デプロイ後に本番投入可能）**
+* **判定**: **合格（本番投入可能）**
 * 実機完全準拠の日本語フォーマットでの連携および取り消し同期が確認されました。
-* 異常系テスト（スキーマバリデーション）の追加により、想定外の形式データに対する検証網羅性を担保しました。
+* 異常系テスト（スキーマバリデーション）の追加と新バージョンデプロイにより、想定外の形式データによるスプレッドシート汚染リスクが完全に解消されました。
+
 
